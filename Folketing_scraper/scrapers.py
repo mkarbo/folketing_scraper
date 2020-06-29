@@ -1,13 +1,20 @@
 from bs4 import BeautifulSoup
 import requests
+from requests import ReadTimeout
 import re
 import json
+import urllib3
+import time
+#ft.dk blocks all requests with verify=True, and we will thus get warning for each requests.get call
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-class FT_scraper:
+class FT_PartyID_Scraper:
     """
     A simple webscraper for www.ft.dk, which gathers content from search function via party ID.
+
+    This will scrape a list of members, their current party including party ID and member ID from ft.dk.
     """
-    def __init__(self, party_id):
+    def __init__(self, party_id, sleep_timer = 0.1):
         self.url_template = 'https://www.ft.dk/searchResults.aspx?sortedDescending=false&party={{{party_id}}}&page=1&sortedBy=&pageSize=200'
         self.page = None # build by self.get_page
         self.soup = None # build by self.get_soup
@@ -16,9 +23,23 @@ class FT_scraper:
 
     def get_page(self, party_id=None):
         url = self.url_template.format(party_id=(party_id if party_id else self.party_id))
-        page = requests.get(url, verify=False)
+        print(f'Requestion page: {url}')
+        page = self._request_timeout(url)
         self.page = page
         return page
+
+    def _request_timeout(self, url, tries=1):
+        if tries == 5:
+            raise Exception('5 retries in a row')
+        try:
+            return requests.get(url, verify=False, timeout=(8,8))
+        except ReadTimeout:
+            print(f'\nRequest timeout (>8 sec). This is attempt number {tries}. Sleeping for {10*(tries)} and trying again on\n- {url}\n')
+            # sleep for a bit in case that helps
+            time.sleep(10*(tries))
+            # try again
+            tries += 1
+        return self._request_timeout(url, tries)
 
     def setup_soup(self):
         if self.page is None:
@@ -64,12 +85,8 @@ class FT_scraper:
             except Exception:
                 pass
             return output
-
-
-
-
         if self.table_rows is None:
-            raise Exception('Table rows not found - please run .find_table_rows first')
+                raise Exception('Table rows not found - please run .find_table_rows first')
         else:
             outputs = []
             trs = self.table_rows
@@ -78,12 +95,38 @@ class FT_scraper:
             self.output = outputs
             return outputs
 
+    def get_member_id(self, member_url):
+        print(f'Requesting page: {member_url}')
+        result = self._request_timeout(member_url)
+        soup = BeautifulSoup(result.content, 'html.parser')
+        #Should only be one such match as of date 29-06-2020
+        member_content = soup.findAll(attrs={'class': 'ftMember__accordion__container panel-group'})[0]
+        minister_id_http = member_content.find_all('a', attrs={'href': re.compile('\?mi={\S{1,}?')})[0].get('href')
+        #Searches for something of the form '^*mi={ID}$'
+        minister_id = re.search('(mi={)(.*)}$', minister_id_http).group(2)
+        return minister_id
+
+    def iter_member_ids(self, rows):
+        """
+        To be used on parse_table_rows output.
+        This method will iterate over output and apply .get_member_id to retrieve member ID.
+        """
+        new_rows = []
+        for row in rows:
+            url = row.get('page_url')
+            row['member_id'] = self.get_member_id(member_url=url)
+            new_rows.append(row)
+        return new_rows
+
+
+
     def run(self):
         self.get_page()
         self.setup_soup()
         self.find_table_rows()
-        self.parse_table_rows()
-        return self.output
+        output = self.parse_table_rows()
+        output = self.iter_member_ids(output)
+        return output
     
 
 class JSON_FT_scraper:
@@ -95,7 +138,7 @@ class JSON_FT_scraper:
     def run(self):
         outputs = []
         for party_id in self.ids:
-            ft = FT_scraper(party_id=party_id)
+            ft = FT_PartyID_Scraper(party_id=party_id)
             outputs.extend(ft.run())
         return outputs
 
