@@ -8,7 +8,25 @@ import time
 #ft.dk blocks all requests with verify=True, and we will thus get warning for each requests.get call
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-class FT_PartyID_Scraper:
+class base_scraper:
+
+    def __init__(self):
+        pass
+    
+    def _request_timeout(self, url, tries=1):
+        if tries == 5:
+            raise Exception('5 retries in a row')
+        try:
+            return requests.get(url, verify=False, timeout=(8,8))
+        except ReadTimeout:
+            print(f'\nRequest timeout (>8 sec). This is attempt number {tries}. Sleeping for {10*(tries)} and trying again on\n- {url}\n')
+            # sleep for a bit in case that helps
+            time.sleep(10*(tries))
+            # try again
+            tries += 1
+        return self._request_timeout(url, tries)
+
+class FT_PartyID_Scraper(base_scraper):
     """
     A simple webscraper for www.ft.dk, which gathers content from search function via party ID.
 
@@ -27,20 +45,7 @@ class FT_PartyID_Scraper:
         page = self._request_timeout(url)
         self.page = page
         return page
-
-    def _request_timeout(self, url, tries=1):
-        if tries == 5:
-            raise Exception('5 retries in a row')
-        try:
-            return requests.get(url, verify=False, timeout=(8,8))
-        except ReadTimeout:
-            print(f'\nRequest timeout (>8 sec). This is attempt number {tries}. Sleeping for {10*(tries)} and trying again on\n- {url}\n')
-            # sleep for a bit in case that helps
-            time.sleep(10*(tries))
-            # try again
-            tries += 1
-        return self._request_timeout(url, tries)
-
+    
     def setup_soup(self):
         if self.page is None:
             raise Exception('Page not downloaded yet - can not setup BS4 Soup')
@@ -151,6 +156,60 @@ class JSON_FT_scraper:
         with open(output_path, 'w') as file:
             file.write(json_dump)
         
+class FT_MemberID_Scraper_Base(base_scraper):
+
+    def __init__(self, member_URL, member_ID):
+        self.url = member_URL
+        self.id = member_ID
+        self.content = self._request_timeout(member_url)
+        self.soup = BeautifulSoup(content.content, 'html.parser')
+        self.initial_block = self._get_initial_block
+
+        self.base_urls = {
+            'questions': {
+                'all': f'{self.url.rstrip('/')}/dokumenter/alle_spoergsmaal?mi={{{self.id}}}&pageSize=10000',
+                'udvalgsspoergsmaal': f'{self.url.rstrip('/')}/dokumenter/udvalgsspoergsmaal?mi={{{self.id}}}&pageSize=10000',
+                'samraadsspoergsmaal': f'{self.url.rstrip('/')}/dokumenter/samraadsspoergsmaal?mi={{{self.id}}}&pageSize=10000',
+                'paragraf_20_spoergsmaal': f'{self.url.rstrip('/')}/dokumenter/paragraf_20_spoergsmaal?mi={{{self.id}}}&pageSize=10000'
+            },
+            'forslag': {
+                'lovforslag': f'{self.url.rstrip('/')}/dokumenter/lovforslag?mi={{{self.id}}}&pageSize=10000',
+                'beslutningsforslag': f'{self.url.rstrip('/')}/dokumenter/beslutningsforslag?mi={{{self.id}}}&pageSize=10000',
+                'forespoergsler': f'{self.url.rstrip('/')}/dokumenter/forespoergsler?mi={{{self.id}}}&pageSize=10000',
+                'forespoergsler': f'{self.url.rstrip('/')}/dokumenter/forespoergsler?mi={{{self.id}}}&pageSize=10000',
+                'redegoerelser': f'{self.url.rstrip('/')}/dokumenter/redegoerelser?mi={{{self.id}}}&pageSize=10000',
+                'forslag_til_vedtagelse': f'{self.url.rstrip('/')}/dokumenter/forslag_til_vedtagelse?mi={{{self.id}}}&pageSize=10000',
+                'alleforslag': f'{self.url.rstrip('/')}/dokumenter/alleforslag?mi={{{self.id}}}&pageSize=10000'
+            },
+            'taler_og_stemmer':{
+                'ordfoerertaler': f'{self.url.rstrip('/')}/dokumenter/ordfoerertaler?mi={{{self.id}}}&pageSize=10000',
+                'alletaler': f'{self.url.rstrip('/')}/dokumenter/alletaler?mi={{{self.id}}}&pageSize=10000',
+                'afstemninger': f'{self.url.rstrip('/')}/dokumenter/afstemninger?mi={{{self.id}}}&pageSize=10000',
+            }
+        }
+        # sessions can be either 20xx1 or 20xx2 (depending on how the year progressed, sometimes it will only have 1 session, however query will just return 0)
+        self.periods= [f'{x}{i}' for x in range(2005,2022) for i in range(1,3)]
+
+        
+    
+    def _get_initial_block(self):
+        result = self.soup.findAll('div', attrs={'class': 'ftMember__accordion__container panel-group'})
+        return result
+
+class FT_MemberID_QuestionScraper(FT_MemberID_Scraper_Base):
+
+    def __init__(self, *args, **kwargs):
+        FT_MemberID_Scraper_Base.__init__(*args, **kwargs) #init super class
+
+    def lovforslag_scraper
+
+
+    
+
+
+
+
+
 
 
 
