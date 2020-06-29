@@ -1,3 +1,5 @@
 *__pycache__*
 *.pyc
 *.egg
+data/output.json
+!data/folketing_id.json
