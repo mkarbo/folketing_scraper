@@ -1,22 +1,24 @@
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 import requests
 from requests import ReadTimeout
 import re
 import json
 import urllib3
 import time
-#ft.dk blocks all requests with verify=True, and we will thus get warning for each requests.get call
+import functools
+#ft.dk blocks all requests with verify=True, and we will thus get warning for each requests.get call unless we disable ssl verification
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class base_scraper:
 
     def __init__(self):
-        pass
+        self.base_url = 'https://ft.dk/'
     
     def _request_timeout(self, url, tries=1):
         if tries == 5:
             raise Exception('5 retries in a row')
         try:
+            print(f'\nAttempting to request site\n - {url}')
             return requests.get(url, verify=False, timeout=(8,8))
         except ReadTimeout:
             print(f'\nRequest timeout (>8 sec). This is attempt number {tries}. Sleeping for {10*(tries)} and trying again on\n- {url}\n')
@@ -25,6 +27,12 @@ class base_scraper:
             # try again
             tries += 1
         return self._request_timeout(url, tries)
+    
+    def has_comment(self, soup_object, comment: str):
+        comments = soup_object.findAll(text=lambda text:isinstance(text, Comment))
+        return bool(comment in comments)
+
+
 
 class FT_PartyID_Scraper(base_scraper):
     """
@@ -67,6 +75,7 @@ class FT_PartyID_Scraper(base_scraper):
             page_url = attrs.get('onclick').split('(')[-1].strip(')').strip('\'')
             output['page_url'] = page_url
             link = attrs.get('data-item-url')
+            print(link) 
             children = [a for a in row.children if a != '\n']
             img_attr = children[0].find_all('img')[0].attrs
             output['img_alt'] = img_attr.get('alt')
@@ -123,8 +132,6 @@ class FT_PartyID_Scraper(base_scraper):
             new_rows.append(row)
         return new_rows
 
-
-
     def run(self):
         self.get_page()
         self.setup_soup()
@@ -132,7 +139,6 @@ class FT_PartyID_Scraper(base_scraper):
         output = self.parse_table_rows()
         output = self.iter_member_ids(output)
         return output
-    
 
 class JSON_FT_scraper:
     def __init__(self, json_path, key='id'):
@@ -161,47 +167,189 @@ class FT_MemberID_Scraper_Base(base_scraper):
     def __init__(self, member_URL, member_ID):
         self.url = member_URL
         self.id = member_ID
-        self.content = self._request_timeout(member_url)
-        self.soup = BeautifulSoup(content.content, 'html.parser')
-        self.initial_block = self._get_initial_block
+        self.content = self._request_timeout(self.url)
+        self.soup = BeautifulSoup(self.content.content, 'html.parser')
+        self.initial_block = self._get_initial_block()
+        self.data = {}
+        self.data['member_id'] = self.id
+        self.data['member_url'] = self.url
 
         self.base_urls = {
             'questions': {
-                'all': f'{self.url.rstrip('/')}/dokumenter/alle_spoergsmaal?mi={{{self.id}}}&pageSize=10000',
-                'udvalgsspoergsmaal': f'{self.url.rstrip('/')}/dokumenter/udvalgsspoergsmaal?mi={{{self.id}}}&pageSize=10000',
-                'samraadsspoergsmaal': f'{self.url.rstrip('/')}/dokumenter/samraadsspoergsmaal?mi={{{self.id}}}&pageSize=10000',
-                'paragraf_20_spoergsmaal': f'{self.url.rstrip('/')}/dokumenter/paragraf_20_spoergsmaal?mi={{{self.id}}}&pageSize=10000'
+                'all': f'{self.url}/dokumenter/alle_spoergsmaal?mi={{{self.id}}}&pageSize=10000',
+                'udvalgsspoergsmaal': f'{self.url}/dokumenter/udvalgsspoergsmaal?mi={{{self.id}}}&pageSize=10000',
+                'samraadsspoergsmaal': f'{self.url}/dokumenter/samraadsspoergsmaal?mi={{{self.id}}}&pageSize=10000',
+                'paragraf_20_spoergsmaal': f'{self.url}/dokumenter/paragraf_20_spoergsmaal?mi={{{self.id}}}&pageSize=10000'
             },
             'forslag': {
-                'lovforslag': f'{self.url.rstrip('/')}/dokumenter/lovforslag?mi={{{self.id}}}&pageSize=10000',
-                'beslutningsforslag': f'{self.url.rstrip('/')}/dokumenter/beslutningsforslag?mi={{{self.id}}}&pageSize=10000',
-                'forespoergsler': f'{self.url.rstrip('/')}/dokumenter/forespoergsler?mi={{{self.id}}}&pageSize=10000',
-                'forespoergsler': f'{self.url.rstrip('/')}/dokumenter/forespoergsler?mi={{{self.id}}}&pageSize=10000',
-                'redegoerelser': f'{self.url.rstrip('/')}/dokumenter/redegoerelser?mi={{{self.id}}}&pageSize=10000',
-                'forslag_til_vedtagelse': f'{self.url.rstrip('/')}/dokumenter/forslag_til_vedtagelse?mi={{{self.id}}}&pageSize=10000',
-                'alleforslag': f'{self.url.rstrip('/')}/dokumenter/alleforslag?mi={{{self.id}}}&pageSize=10000'
+                'lovforslag': f'{self.url}/dokumenter/lovforslag?mi={{{self.id}}}&pageSize=10000',
+                'beslutningsforslag': f'{self.url}/dokumenter/beslutningsforslag?mi={{{self.id}}}&pageSize=10000',
+                'forespoergsler': f'{self.url}/dokumenter/forespoergsler?mi={{{self.id}}}&pageSize=10000',
+                'redegoerelser': f'{self.url}/dokumenter/redegoerelser?mi={{{self.id}}}&pageSize=10000',
+                'forslag_til_vedtagelse': f'{self.url}/dokumenter/forslag_til_vedtagelse?mi={{{self.id}}}&pageSize=10000',
+                'alleforslag': f'{self.url}/dokumenter/alleforslag?mi={{{self.id}}}&pageSize=10000'
             },
             'taler_og_stemmer':{
-                'ordfoerertaler': f'{self.url.rstrip('/')}/dokumenter/ordfoerertaler?mi={{{self.id}}}&pageSize=10000',
-                'alletaler': f'{self.url.rstrip('/')}/dokumenter/alletaler?mi={{{self.id}}}&pageSize=10000',
-                'afstemninger': f'{self.url.rstrip('/')}/dokumenter/afstemninger?mi={{{self.id}}}&pageSize=10000',
+                'ordfoerertaler': f'{self.url}/dokumenter/ordfoerertaler?mi={{{self.id}}}&pageSize=10000',
+                'alletaler': f'{self.url}/dokumenter/alletaler?mi={{{self.id}}}&pageSize=10000',
+                'afstemninger': f'{self.url}/dokumenter/afstemninger?mi={{{self.id}}}&pageSize=10000',
             }
         }
         # sessions can be either 20xx1 or 20xx2 (depending on how the year progressed, sometimes it will only have 1 session, however query will just return 0)
-        self.periods= [f'{x}{i}' for x in range(2005,2022) for i in range(1,3)]
+        self.periods= [f'{x}{i}' for x in range(2005,2023) for i in range(1,3)]
 
         
     
     def _get_initial_block(self):
-        result = self.soup.findAll('div', attrs={'class': 'ftMember__accordion__container panel-group'})
+        result = self.soup.findAll('div', attrs={'class': 'ftMember__accordion__container panel-group'})[0]
         return result
 
-class FT_MemberID_QuestionScraper(FT_MemberID_Scraper_Base):
+class FT_MemberID_CvScraper(FT_MemberID_Scraper_Base):
 
     def __init__(self, *args, **kwargs):
-        FT_MemberID_Scraper_Base.__init__(*args, **kwargs) #init super class
+        FT_MemberID_Scraper_Base.__init__(self, *args, **kwargs) #init super class
+        
+        self.scrape_scope ={
+            'medlemsperiode' : True,
+            'parlamentarisk_karriere' : True,
+            'uddannelse' : True,
+            'beskaeftigelse' : True,
+            'tillidshverv' : True,
+            'publikationer' : True,
+            'udmaerkelser' : True
+        }
 
-    def lovforslag_scraper
+    def get_cv_block(self):
+        return self.initial_block.findAll('div', attrs={'id': 'cv'})[0]
+    
+    def _has_section(self):
+        return len(self.get_cv_block().findAll('section')) > 0
+    
+    def get_resume(self):
+            #The first section on page is resume
+            #replace just fixes weird unicode white space issue
+            self.data['resume'] = self.cv.findAll('section')[0].text.strip().replace('\xa0', ' ')
+
+    def filter_sections(self, filter_string, sections):
+        to_return = []
+        for section in sections:
+            if section.findAll('strong') is not None:
+                postprocessed = [y.text.lower().strip().replace(' ', '_') for y in section.findAll('strong')]
+                if any([bool(y.replace('æ', 'ae').replace('ø', 'oe').replace('å', 'aa') == filter_string) for y in postprocessed]):
+                    to_return.append(section)
+        return to_return
+
+    def meta_cv_scraper(self, type):
+        """
+        Filters through sections containing a <strong> tagged string matching type (roughly), and collects data from it.
+        """
+        sections = self.filter_sections(filter_string=type, sections=self.cv_sections)
+        if len(sections) > 1:
+            raise Exception(f'Multiple {type} sections found')
+        self.data[type] = []
+        if len(sections) == 1:
+            section = sections[0]
+            asides = section.findAll('aside')
+            for item in asides:
+                for rowline in item.text.strip().replace('\xa0', ' ').replace('\r\n', '\n').split('\n'):
+                    if rowline.strip() != '':
+                        self.data[type].append({'type': 'aside', 'data' : rowline.strip()})
+            ps = section.findAll('p')
+            for item in ps:
+                for rowline in item.text.strip().replace('\xa0', ' ').replace('\r\n', '\n').split('\n'):
+                    if rowline.strip() != '':
+                        self.data[type].append({'type' : 'p', 'data': rowline.strip()})
+
+            
+    def run(self):
+        if self._has_section():
+            self.cv = self.get_cv_block()
+            self.get_resume()
+            self.cv_sections =self. cv.findAll('section')
+            for scope, run_bool in self.scrape_scope.items():
+                if run_bool:
+                    self.meta_cv_scraper(scope)
+
+class FT_MemberID_ForslagScraper(FT_MemberID_Scraper_Base):
+    def __init__(self, *args, **kwargs):
+        FT_MemberID_Scraper_Base.__init__(self, *args, **kwargs) #init super class
+        self.scrape_scope = self.base_urls.get('forslag')
+        self.data={}
+        self.base_url = 'https://ft.dk/'
+        
+
+        self.tablerow_index_map = {
+            'lovforslag': {0: 'Nr', 1: 'Titel', 2: 'Rolle', 3: 'Ministeromraade', 4: 'Samling'},
+            'beslutningsforslag': {0: 'Nr', 1: 'Titel', 2: 'Rolle', 3: 'Ministeromraade', 4: 'Samling'},
+            'forespoergsler': {0: 'Nr', 1: 'Titel', 2: 'Rolle', 3: 'Ministeromraade', 4: 'Samling'},
+            'redegoerelser': {0: 'Nr', 1: 'Titel', 2: 'Afgivet af', 3: 'Rolle', 4: 'Samling'},
+            'forslag_til_vedtagelse': {0: 'Nr', 1: 'Titel', 2: 'Samling'},
+            'alleforslag': {0: 'Nr', 1: 'Titel', 2: 'Rolle', 3: 'Ministeromraade', 4: 'Samling'}
+        }
+        for key in self.tablerow_index_map.keys():
+            self.data[key] = []
+
+    def get_forslag_scope(self, scope, period):
+            url = self.scrape_scope.get(scope)
+            url = f'{url}&session={period}'
+            response = self._request_timeout(url)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            table_rows = soup.findAll('tr', attrs={'class': re.compile('^listespot'), 'data-url': re.compile('^/\S')})
+            output = []
+            if table_rows != []:
+                # Helper function to parse output
+                def _parse_row(row, index):
+                    try:
+                        return row.findAll('a')[index].text.strip(), row.findAll('a')[index].get('href')
+                    except:
+                        return None, None
+
+
+                for row in table_rows:
+                    to_append = {}
+                    for i in range(len(self.tablerow_index_map[scope].keys())):
+                        
+                        text, url_end = _parse_row(row, i)
+                        to_append[self.tablerow_index_map[scope][i]] = text
+                        if url_end:
+                            to_append['Url'] = f'{self.base_url}{url_end}'.replace('//','/')
+                        to_append['Period'] =  period
+                    if to_append.get('Url') is None:
+                        to_append['Url'] = None
+                    output.append(to_append)
+            return output
+    
+    def run(self):
+        for period in self.periods:
+            for key in self.tablerow_index_map.keys():
+                data = self.get_forslag_scope(scope=key, period=period)
+                if data:
+                    #Format data correctly -currently it is too nested.
+                    self.data[key].append(data)
+        for key in self.tablerow_index_map.keys():
+            if len(self.data[key])>1:
+                self.data[key] = functools.reduce(lambda x,y: x + y, self.data[key])
+            if len(self.data[key]) == 1 & isinstance(self.data[key][0], list):
+                self.data[key] = self.data[key][0]
+
+
+
+
+
+
+
+
+            
+
+
+
+
+
+
+    
+
+
+
 
 
     
